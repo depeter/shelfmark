@@ -1966,7 +1966,7 @@ class HardcoverProvider(MetadataProvider):
     DISCOVERY_SECTION_SORTS = {
         "trending": "users_count:desc",
         "new_releases": "release_year:desc",
-        "highly_rated": "rating:desc",
+        "highly_rated": "rating:desc,ratings_count:desc",
     }
 
     DISCOVERY_SECTION_MIN_RATINGS = {
