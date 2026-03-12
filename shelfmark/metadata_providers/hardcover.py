@@ -2019,35 +2019,27 @@ class HardcoverProvider(MetadataProvider):
 
     def _fetch_discovery_books(self, sort_param: str, page: int, limit: int, min_ratings: int = 0) -> SearchResult:
         """Fetch books for a discovery section with the given sort and pagination."""
-        if min_ratings:
-            graphql_query = """
-            query SearchBooks($query: String!, $limit: Int!, $page: Int!, $sort: String, $filter_by: String) {
-                search(query: $query, query_type: "Book", per_page: $limit, page: $page, sort: $sort, filter_by: $filter_by) {
-                    results
-                }
+        graphql_query = """
+        query SearchBooks($query: String!, $limit: Int!, $page: Int!, $sort: String) {
+            search(query: $query, query_type: "Book", per_page: $limit, page: $page, sort: $sort) {
+                results
             }
-            """
-        else:
-            graphql_query = """
-            query SearchBooks($query: String!, $limit: Int!, $page: Int!, $sort: String) {
-                search(query: $query, query_type: "Book", per_page: $limit, page: $page, sort: $sort) {
-                    results
-                }
-            }
-            """
+        }
+        """
 
         exclude_compilations = app_config.get("HARDCOVER_EXCLUDE_COMPILATIONS", False)
         exclude_unreleased = app_config.get("HARDCOVER_EXCLUDE_UNRELEASED", False)
         current_year = datetime.now().year
 
+        # Over-fetch when client-side filtering is needed so we can fill the page
+        fetch_limit = limit * 4 if min_ratings else limit
+
         variables = {
             "query": "*",
-            "limit": limit,
+            "limit": fetch_limit,
             "page": page,
             "sort": sort_param,
         }
-        if min_ratings:
-            variables["filter_by"] = f"ratings_count:>={min_ratings}"
 
         result = self._execute_query(graphql_query, variables)
         if not result:
@@ -2066,9 +2058,13 @@ class HardcoverProvider(MetadataProvider):
                 release_year = item.get("release_year")
                 if release_year is not None and release_year > current_year:
                     continue
+            if min_ratings and coerce_int(item.get("ratings_count"), 0) < min_ratings:
+                continue
             book = self._parse_search_result(item)
             if book:
                 books.append(book)
+                if len(books) >= limit:
+                    break
 
         return SearchResult(
             books=books,
