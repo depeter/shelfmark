@@ -1963,6 +1963,103 @@ class HardcoverProvider(MetadataProvider):
                 return
         raise RuntimeError("Hardcover could not complete this action")
 
+    DISCOVERY_SECTION_SORTS = {
+        "trending": "users_count:desc",
+        "new_releases": "release_year:desc",
+        "highly_rated": "rating:desc",
+    }
+
+    def get_discovery_sections(self) -> Dict[str, SearchResult]:
+        """Return curated discovery sections (trending, new releases, highly rated)."""
+        if not self.api_key:
+            return {}
+
+        exclude_compilations = app_config.get("HARDCOVER_EXCLUDE_COMPILATIONS", False)
+        exclude_unreleased = app_config.get("HARDCOVER_EXCLUDE_UNRELEASED", False)
+        cache_key = f"excl_comp={exclude_compilations}:excl_unrel={exclude_unreleased}"
+        return self._get_discovery_sections_cached(cache_key)
+
+    def get_discovery_section(self, section_key: str, page: int = 1, limit: int = 40) -> SearchResult:
+        """Return a single paginated discovery section."""
+        if not self.api_key:
+            return SearchResult(books=[], page=page, total_found=0, has_more=False)
+
+        sort_param = self.DISCOVERY_SECTION_SORTS.get(section_key)
+        if not sort_param:
+            return SearchResult(books=[], page=page, total_found=0, has_more=False)
+
+        exclude_compilations = app_config.get("HARDCOVER_EXCLUDE_COMPILATIONS", False)
+        exclude_unreleased = app_config.get("HARDCOVER_EXCLUDE_UNRELEASED", False)
+        cache_key = f"{section_key}:p={page}:l={limit}:excl_comp={exclude_compilations}:excl_unrel={exclude_unreleased}"
+        return self._get_discovery_section_cached(cache_key, section_key, page, limit)
+
+    @cacheable(ttl=3600, key_prefix="hardcover:discover_section")
+    def _get_discovery_section_cached(self, cache_key: str, section_key: str, page: int, limit: int) -> SearchResult:
+        """Cached single discovery section implementation."""
+        sort_param = self.DISCOVERY_SECTION_SORTS[section_key]
+        return self._fetch_discovery_books(sort_param, page, limit)
+
+    @cacheable(ttl=3600, key_prefix="hardcover:discover")
+    def _get_discovery_sections_cached(self, cache_key: str) -> Dict[str, SearchResult]:
+        """Cached discovery sections implementation."""
+        sections: Dict[str, SearchResult] = {}
+        for section_key, sort_param in self.DISCOVERY_SECTION_SORTS.items():
+            try:
+                sections[section_key] = self._fetch_discovery_books(sort_param, page=1, limit=15)
+            except Exception as e:
+                logger.error(f"Hardcover discovery section '{section_key}' error: {e}")
+                sections[section_key] = SearchResult(books=[], page=1, total_found=0, has_more=False)
+        return sections
+
+    def _fetch_discovery_books(self, sort_param: str, page: int, limit: int) -> SearchResult:
+        """Fetch books for a discovery section with the given sort and pagination."""
+        graphql_query = """
+        query SearchBooks($query: String!, $limit: Int!, $page: Int!, $sort: String) {
+            search(query: $query, query_type: "Book", per_page: $limit, page: $page, sort: $sort) {
+                results
+            }
+        }
+        """
+
+        exclude_compilations = app_config.get("HARDCOVER_EXCLUDE_COMPILATIONS", False)
+        exclude_unreleased = app_config.get("HARDCOVER_EXCLUDE_UNRELEASED", False)
+        current_year = datetime.now().year
+
+        variables = {
+            "query": "*",
+            "limit": limit,
+            "page": page,
+            "sort": sort_param,
+        }
+
+        result = self._execute_query(graphql_query, variables)
+        if not result:
+            return SearchResult(books=[], page=page, total_found=0, has_more=False)
+
+        hits, found_count = _extract_typesense_hits(result)
+
+        books = []
+        for hit in hits:
+            item = _unwrap_hit_document(hit)
+            if item is None:
+                continue
+            if exclude_compilations and item.get("compilation"):
+                continue
+            if exclude_unreleased:
+                release_year = item.get("release_year")
+                if release_year is not None and release_year > current_year:
+                    continue
+            book = self._parse_search_result(item)
+            if book:
+                books.append(book)
+
+        return SearchResult(
+            books=books,
+            page=page,
+            total_found=found_count,
+            has_more=(page * limit) < found_count,
+        )
+
     def search(self, options: MetadataSearchOptions) -> List[BookMetadata]:
         """Search for books using Hardcover's search API."""
         return self.search_paginated(options).books

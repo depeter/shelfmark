@@ -658,10 +658,9 @@ def set_security_headers(response: Response) -> Response:
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; connect-src 'self' ws: wss:; font-src 'self'",
     )
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-    response.headers.setdefault("Cross-Origin-Embedder-Policy", "credentialless")
     return response
 
 
@@ -2197,6 +2196,86 @@ def api_metadata_search() -> Union[Response, Tuple[Response, int]]:
         return jsonify(response_data)
     except Exception as e:
         logger.error_trace(f"Metadata search error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/metadata/discover', methods=['GET'])
+@login_required
+def api_metadata_discover() -> Union[Response, Tuple[Response, int]]:
+    """Return curated book discovery sections (trending, new releases, highly rated)."""
+    try:
+        from shelfmark.metadata_providers import get_configured_provider, get_enabled_providers, get_provider, get_provider_kwargs
+        from dataclasses import asdict
+
+        db_user_id = get_session_db_user_id(session)
+        provider = get_configured_provider(content_type="ebook", user_id=db_user_id)
+
+        # Fall back to any enabled provider that supports discovery
+        if not provider or not hasattr(provider, 'get_discovery_sections'):
+            provider = None
+            for name in get_enabled_providers():
+                candidate = get_provider(name, **get_provider_kwargs(name))
+                if hasattr(candidate, 'get_discovery_sections'):
+                    provider = candidate
+                    break
+
+        if not provider:
+            return jsonify({"sections": []})
+
+        from shelfmark.core.utils import transform_cover_url
+
+        section_definitions = {
+            "trending": "Trending",
+            "new_releases": "New Releases",
+            "highly_rated": "Highly Rated",
+        }
+
+        # Single-section paginated mode
+        section_param = request.args.get('section')
+        if section_param and section_param in section_definitions:
+            page = max(1, request.args.get('page', 1, type=int))
+            limit = min(60, max(1, request.args.get('limit', 40, type=int)))
+
+            if not hasattr(provider, 'get_discovery_section'):
+                return jsonify({"section": {"key": section_param, "title": section_definitions[section_param], "books": [], "page": page, "has_more": False, "total_found": 0}})
+
+            search_result = provider.get_discovery_section(section_param, page=page, limit=limit)
+            books_data = [asdict(book) for book in search_result.books]
+            for book_dict in books_data:
+                if book_dict.get('cover_url'):
+                    cache_id = f"{book_dict['provider']}_{book_dict['provider_id']}"
+                    book_dict['cover_url'] = transform_cover_url(book_dict['cover_url'], cache_id)
+
+            return jsonify({"section": {
+                "key": section_param,
+                "title": section_definitions[section_param],
+                "books": books_data,
+                "page": search_result.page,
+                "has_more": search_result.has_more,
+                "total_found": search_result.total_found,
+            }})
+
+        # All-sections mode (original behavior)
+        discovery = provider.get_discovery_sections()
+
+        sections = []
+        for key, title in section_definitions.items():
+            search_result = discovery.get(key)
+            if not search_result:
+                sections.append({"key": key, "title": title, "books": []})
+                continue
+
+            books_data = [asdict(book) for book in search_result.books]
+            for book_dict in books_data:
+                if book_dict.get('cover_url'):
+                    cache_id = f"{book_dict['provider']}_{book_dict['provider_id']}"
+                    book_dict['cover_url'] = transform_cover_url(book_dict['cover_url'], cache_id)
+
+            sections.append({"key": key, "title": title, "books": books_data})
+
+        return jsonify({"sections": sections})
+    except Exception as e:
+        logger.error_trace(f"Metadata discover error: {e}")
         return jsonify({"error": str(e)}), 500
 
 

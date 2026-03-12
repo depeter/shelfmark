@@ -1,5 +1,6 @@
 import {
   AdvancedFilterState,
+  Book,
   Language,
   MetadataSearchField,
   ContentType,
@@ -7,7 +8,9 @@ import {
   SearchMode,
   MetadataProviderSummary,
 } from '../types';
+import { DiscoverySectionResult } from '../services/api';
 import { AdvancedFilters } from './AdvancedFilters';
+import { DiscoverSection } from './DiscoverSection';
 import { SearchBar } from './SearchBar';
 
 interface SearchSectionProps {
@@ -37,6 +40,10 @@ interface SearchSectionProps {
   activeMetadataProvider?: string | null;
   onMetadataProviderChange?: (provider: string) => void;
   isAdmin?: boolean;
+  discoverSections?: DiscoverySectionResult[];
+  isDiscoveryLoading?: boolean;
+  onDiscoverBookClick?: (book: Book) => void;
+  onDiscoverSeeMore?: (sectionKey: string) => void;
 }
 
 export const SearchSection = ({
@@ -66,13 +73,17 @@ export const SearchSection = ({
   activeMetadataProvider,
   onMetadataProviderChange,
   isAdmin = false,
+  discoverSections,
+  isDiscoveryLoading,
+  onDiscoverBookClick,
+  onDiscoverSeeMore,
 }: SearchSectionProps) => {
   return (
     <section
       id="search-section"
       className={`${
         isInitialState
-          ? 'search-initial-state mb-6'
+          ? `search-initial-state${discoverSections?.length ? ' has-discovery' : ''} mb-6`
           : 'mb-3 sm:mb-4'
       } ${showAdvanced ? 'search-advanced-visible' : ''}`}
     >
@@ -123,6 +134,14 @@ export const SearchSection = ({
           isAdmin={isAdmin}
           onClose={onAdvancedToggle}
         />
+        {onDiscoverBookClick && (discoverSections?.length || isDiscoveryLoading) && (
+          <DiscoverSection
+            sections={discoverSections || []}
+            isLoading={isDiscoveryLoading || false}
+            onBookClick={onDiscoverBookClick}
+            onSeeMore={onDiscoverSeeMore}
+          />
+        )}
       </div>
     </section>
   );

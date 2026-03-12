@@ -43,8 +43,10 @@ import { useRequestPolicy } from './hooks/useRequestPolicy';
 import { resolveDefaultModeFromPolicy, resolveSourceModeFromPolicy } from './hooks/requestPolicyCore';
 import { useRequests } from './hooks/useRequests';
 import { useActivity } from './hooks/useActivity';
+import { useDiscovery } from './hooks/useDiscovery';
 import { Header } from './components/Header';
 import { SearchSection } from './components/SearchSection';
+import { DiscoverExpandedView } from './components/DiscoverExpandedView';
 import { AdvancedFilters } from './components/AdvancedFilters';
 import { ResultsSection } from './components/ResultsSection';
 import { DetailsModal } from './components/DetailsModal';
@@ -550,7 +552,14 @@ function App() {
 
   // Compute visibility states
   const hasResults = books.length > 0;
-  const isInitialState = !hasResults;
+
+  const discoveryAvailable = metadataProviders.some(p => p.available);
+  const { sections: discoverSections, isLoading: isDiscoveryLoading } = useDiscovery({
+    enabled: isAuthenticated && discoveryAvailable,
+  });
+
+  const [expandedDiscoverySection, setExpandedDiscoverySection] = useState<string | null>(null);
+  const isInitialState = !hasResults && !expandedDiscoverySection;
 
   // Detect status changes and show notifications
   const detectChanges = useCallback((prev: StatusData, curr: StatusData) => {
@@ -836,6 +845,7 @@ function App() {
       searchModeOverride?: SearchMode;
       providerOverride?: string;
     }) => {
+      setExpandedDiscoverySection(null);
       void refreshRequestPolicy();
       void handleSearch({
         query: opts.query,
@@ -2046,6 +2056,10 @@ function App() {
     ? formatActingAsUserName(pendingOnBehalfDownload.actingAsUser)
     : '';
 
+  const handleDiscoverBookClick = useCallback((book: Book) => {
+    void handleGetReleases(book);
+  }, [handleGetReleases]);
+
   const mainAppContent = (
     <SearchModeProvider searchMode={effectiveSearchMode}>
       <div ref={headerRef} className="fixed top-0 left-0 right-0 z-40">
@@ -2081,6 +2095,7 @@ function App() {
             handleResetSearch(config);
             setActiveQueryTarget('general');
             setActiveResultsSort('');
+            setExpandedDiscoverySection(null);
           }}
           authRequired={authRequired}
           isAuthenticated={isAuthenticated}
@@ -2177,7 +2192,21 @@ function App() {
           activeMetadataProvider={effectiveMetadataProvider}
           onMetadataProviderChange={handleMetadataProviderChange}
           isAdmin={requestRoleIsAdmin}
+          discoverSections={discoverSections}
+          isDiscoveryLoading={isDiscoveryLoading}
+          onDiscoverBookClick={handleDiscoverBookClick}
+          onDiscoverSeeMore={setExpandedDiscoverySection}
         />
+
+        {expandedDiscoverySection && !hasResults && (
+          <DiscoverExpandedView
+            sectionKey={expandedDiscoverySection}
+            initialBooks={discoverSections?.find(s => s.key === expandedDiscoverySection)?.books || []}
+            initialTitle={discoverSections?.find(s => s.key === expandedDiscoverySection)?.title || ''}
+            onBack={() => setExpandedDiscoverySection(null)}
+            onBookClick={handleDiscoverBookClick}
+          />
+        )}
 
         <ResultsSection
           books={books}

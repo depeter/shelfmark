@@ -657,6 +657,10 @@
         padding-top: 20vh; /* Position in upper portion of screen */
     }
 
+    .search-initial-state.has-discovery {
+        padding-top: 10vh;
+    }
+
     /* Mobile-friendly book card layout */
     /* On mobile (below 640px), use horizontal layout: image left, text right, buttons below */
     /* Desktop remains unchanged - full width, full height artwork via Tailwind classes */
@@ -664,6 +668,10 @@
         .search-initial-state {
             justify-content: flex-start;
             padding-top: 18vh; /* push the search UI toward the upper third */
+        }
+
+        .search-initial-state.has-discovery {
+            padding-top: 8vh;
         }
 
         /* When advanced filters are visible, pull the search bar to the very top */

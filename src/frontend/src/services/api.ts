@@ -55,6 +55,7 @@ const API = {
   activityDismiss: `${API_BASE}/activity/dismiss`,
   activityDismissMany: `${API_BASE}/activity/dismiss-many`,
   activityHistory: `${API_BASE}/activity/history`,
+  metadataDiscover: `${API_BASE}/metadata/discover`,
 };
 
 // Custom error class for authentication failures
@@ -308,6 +309,60 @@ export const searchMetadata = async (
 
 export const getMetadataProviders = async (): Promise<MetadataProvidersResponse> => {
   return fetchJSON<MetadataProvidersResponse>(API.metadataProviders);
+};
+
+// Discovery section response
+interface DiscoverySection {
+  key: string;
+  title: string;
+  books: MetadataBookData[];
+}
+
+interface DiscoveryResponse {
+  sections: DiscoverySection[];
+}
+
+export interface DiscoverySectionResult {
+  key: string;
+  title: string;
+  books: Book[];
+}
+
+export const getDiscovery = async (): Promise<DiscoverySectionResult[]> => {
+  const response = await fetchJSON<DiscoveryResponse>(API.metadataDiscover);
+  return response.sections.map(section => ({
+    key: section.key,
+    title: section.title,
+    books: section.books.map(transformMetadataToBook),
+  }));
+};
+
+export interface DiscoverySectionPageResult {
+  key: string;
+  title: string;
+  books: Book[];
+  page: number;
+  hasMore: boolean;
+  totalFound: number;
+}
+
+export const getDiscoverySection = async (
+  sectionKey: string,
+  page: number = 1,
+  limit: number = 40,
+): Promise<DiscoverySectionPageResult> => {
+  const params = new URLSearchParams({ section: sectionKey, page: String(page), limit: String(limit) });
+  const response = await fetchJSON<{ section: DiscoverySection & { page: number; has_more: boolean; total_found: number } }>(
+    `${API.metadataDiscover}?${params}`,
+  );
+  return {
+    key: response.section.key,
+    title: response.section.title,
+    books: response.section.books.map(transformMetadataToBook),
+    page: response.section.page,
+    hasMore: response.section.has_more,
+    totalFound: response.section.total_found,
+  };
 };
 
 export const getMetadataSearchConfig = async (
