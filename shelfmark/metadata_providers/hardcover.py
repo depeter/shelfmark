@@ -1969,6 +1969,10 @@ class HardcoverProvider(MetadataProvider):
         "highly_rated": "rating:desc",
     }
 
+    DISCOVERY_SECTION_MIN_RATINGS = {
+        "highly_rated": 5,
+    }
+
     def get_discovery_sections(self) -> Dict[str, SearchResult]:
         """Return curated discovery sections (trending, new releases, highly rated)."""
         if not self.api_key:
@@ -1997,7 +2001,8 @@ class HardcoverProvider(MetadataProvider):
     def _get_discovery_section_cached(self, cache_key: str, section_key: str, page: int, limit: int) -> SearchResult:
         """Cached single discovery section implementation."""
         sort_param = self.DISCOVERY_SECTION_SORTS[section_key]
-        return self._fetch_discovery_books(sort_param, page, limit)
+        min_ratings = self.DISCOVERY_SECTION_MIN_RATINGS.get(section_key, 0)
+        return self._fetch_discovery_books(sort_param, page, limit, min_ratings=min_ratings)
 
     @cacheable(ttl=3600, key_prefix="hardcover:discover")
     def _get_discovery_sections_cached(self, cache_key: str) -> Dict[str, SearchResult]:
@@ -2005,13 +2010,14 @@ class HardcoverProvider(MetadataProvider):
         sections: Dict[str, SearchResult] = {}
         for section_key, sort_param in self.DISCOVERY_SECTION_SORTS.items():
             try:
-                sections[section_key] = self._fetch_discovery_books(sort_param, page=1, limit=15)
+                min_ratings = self.DISCOVERY_SECTION_MIN_RATINGS.get(section_key, 0)
+                sections[section_key] = self._fetch_discovery_books(sort_param, page=1, limit=15, min_ratings=min_ratings)
             except Exception as e:
                 logger.error(f"Hardcover discovery section '{section_key}' error: {e}")
                 sections[section_key] = SearchResult(books=[], page=1, total_found=0, has_more=False)
         return sections
 
-    def _fetch_discovery_books(self, sort_param: str, page: int, limit: int) -> SearchResult:
+    def _fetch_discovery_books(self, sort_param: str, page: int, limit: int, min_ratings: int = 0) -> SearchResult:
         """Fetch books for a discovery section with the given sort and pagination."""
         graphql_query = """
         query SearchBooks($query: String!, $limit: Int!, $page: Int!, $sort: String) {
@@ -2049,6 +2055,8 @@ class HardcoverProvider(MetadataProvider):
                 release_year = item.get("release_year")
                 if release_year is not None and release_year > current_year:
                     continue
+            if min_ratings and coerce_int(item.get("ratings_count"), 0) < min_ratings:
+                continue
             book = self._parse_search_result(item)
             if book:
                 books.append(book)
