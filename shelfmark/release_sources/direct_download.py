@@ -198,7 +198,7 @@ def search_books(query: str, filters: SearchFilters) -> List[BrowseRecord]:
         f"{filters_query}"
     )
 
-    html = downloader.html_get_page(url, selector=selector, allow_bypasser_fallback=False)
+    html = downloader.html_get_page(url, selector=selector, allow_bypasser_fallback=True)
     if not html:
         # Network/mirror exhaustion path bubbles up so API can notify clients
         raise SearchUnavailable("Unable to reach download source. Network restricted or mirrors are blocked.")
@@ -248,7 +248,7 @@ def get_book_info(book_id: str, fetch_download_count: bool = True) -> BrowseReco
     """
     url = f"{network.get_aa_base_url()}/md5/{book_id}"
     selector = network.AAMirrorSelector()
-    html = downloader.html_get_page(url, selector=selector, allow_bypasser_fallback=False)
+    html = downloader.html_get_page(url, selector=selector, allow_bypasser_fallback=True)
 
     if not html:
         raise SearchUnavailable("Unable to reach download source. Network restricted or mirrors are blocked.")
