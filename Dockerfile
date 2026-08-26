@@ -69,6 +69,8 @@ RUN apt-get update && \
     zip iputils-ping \
     # For user switching
     gosu \
+    # For compiling C extensions (e.g. gevent) when no prebuilt wheel exists for this arch/Python combo
+    gcc \
     # --- Tor support (activated via USING_TOR=true) ---
     tor \
     supervisor \
