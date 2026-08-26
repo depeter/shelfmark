@@ -169,6 +169,36 @@ def _try_rotation(original_url: str, current_url: str, selector: network.AAMirro
     return None
 
 
+def _decide_on_block(
+    current_url: str,
+    cookies: dict,
+    use_bypasser_now: bool,
+    allow_bypasser_fallback: bool,
+    original_url: str,
+    selector: network.AAMirrorSelector,
+) -> tuple[str, Optional[str]]:
+    """Decide how to react when a mirror is blocking us (403, or a redirect loop that
+    never resolves - both are signs of an unsolved Cloudflare/DDoS-Guard challenge).
+
+    Returns (action, payload) where action is one of:
+        "rotate" (payload = new url), "retry_cookies", "bypasser", "give_up"
+    """
+    if not allow_bypasser_fallback:
+        new_url = _try_rotation(original_url, current_url, selector)
+        if new_url:
+            return "rotate", new_url
+        return "give_up", None
+
+    if _is_cf_bypass_enabled() and not use_bypasser_now:
+        parsed = urlparse(current_url)
+        fresh_cookies = get_cf_cookies_for_domain(parsed.hostname or "")
+        if fresh_cookies and not cookies:
+            return "retry_cookies", None
+        return "bypasser", None
+
+    return "give_up", None
+
+
 def html_get_page(
     url: str,
     retry: Optional[int] = None,
@@ -267,7 +297,27 @@ def html_get_page(
                 if is_aa_url and response.is_redirect:
                     location = response.headers.get("Location", "")
                     if not location:
-                        raise requests.exceptions.TooManyRedirects(f"Redirect with no Location header: {current_url}")
+                        logger.info(f"Redirect with no Location header (likely unsolved challenge): {current_url}")
+                        action, payload = _decide_on_block(
+                            current_url, cookies, use_bypasser_now, allow_bypasser_fallback, original_url, selector
+                        )
+                        if action == "rotate":
+                            current_url = payload
+                            headers = {"User-Agent": DOWNLOAD_HEADERS["User-Agent"]}
+                            is_aa_url = network.should_rotate_dns_for_url(current_url)
+                            allow_redirects = not is_aa_url
+                            redirects_followed = 0
+                            continue
+                        if action == "retry_cookies":
+                            continue
+                        if action == "bypasser":
+                            logger.info(f"Switching to bypasser: {current_url}")
+                            if status_callback:
+                                status_callback("resolving", "Bypassing protection...")
+                            use_bypasser_now = True
+                            continue
+                        logger.warning(f"Redirect loop, giving up: {current_url}")
+                        return _result("", current_url)
 
                     redirect_url = urljoin(current_url, location)
                     current_host = urlparse(current_url).hostname or ""
@@ -306,7 +356,27 @@ def html_get_page(
                     # Same-host redirect (relative or absolute) - follow manually.
                     redirects_followed += 1
                     if redirects_followed > 5:
-                        raise requests.exceptions.TooManyRedirects(f"Too many redirects for {current_url}")
+                        logger.info(f"Redirect loop (likely unsolved challenge): {current_url}")
+                        action, payload = _decide_on_block(
+                            current_url, cookies, use_bypasser_now, allow_bypasser_fallback, original_url, selector
+                        )
+                        if action == "rotate":
+                            current_url = payload
+                            headers = {"User-Agent": DOWNLOAD_HEADERS["User-Agent"]}
+                            is_aa_url = network.should_rotate_dns_for_url(current_url)
+                            allow_redirects = not is_aa_url
+                            redirects_followed = 0
+                            continue
+                        if action == "retry_cookies":
+                            continue
+                        if action == "bypasser":
+                            logger.info(f"Switching to bypasser: {current_url}")
+                            if status_callback:
+                                status_callback("resolving", "Bypassing protection...")
+                            use_bypasser_now = True
+                            continue
+                        logger.warning(f"Redirect loop, giving up: {current_url}")
+                        return _result("", current_url)
                     current_url = redirect_url
                     continue
 
@@ -320,24 +390,16 @@ def html_get_page(
 
             # 403 = Cloudflare/DDoS-Guard protection
             if status == 403:
-                # If bypasser fallback is disabled, try mirrors instead
-                if not allow_bypasser_fallback:
-                    new_url = _try_rotation(original_url, current_url, selector)
-                    if new_url:
-                        current_url = new_url
-                        continue
-                    logger.warning(f"403 error, mirrors exhausted: {current_url}")
-                    return _result("", current_url)
-
-                if _is_cf_bypass_enabled() and not use_bypasser_now:
-                    # Before switching to bypasser, check if cookies have become available
-                    # (another concurrent download may have completed bypass and extracted cookies)
-                    parsed = urlparse(current_url)
-                    fresh_cookies = get_cf_cookies_for_domain(parsed.hostname or "")
-                    if fresh_cookies and not cookies:
-                        # Cookies are now available - retry with cookies before using bypasser
-                        logger.debug(f"403 but cookies now available - retrying with cookies: {current_url}")
-                        continue
+                action, payload = _decide_on_block(
+                    current_url, cookies, use_bypasser_now, allow_bypasser_fallback, original_url, selector
+                )
+                if action == "rotate":
+                    current_url = payload
+                    continue
+                if action == "retry_cookies":
+                    logger.debug(f"403 but cookies now available - retrying with cookies: {current_url}")
+                    continue
+                if action == "bypasser":
                     logger.info(f"403 detected; switching to bypasser: {current_url}")
                     if status_callback:
                         status_callback("resolving", "Bypassing protection...")
