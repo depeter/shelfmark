@@ -155,6 +155,12 @@ def _is_retryable_error(e: Exception) -> bool:
     return status is not None and status in RETRYABLE_CODES
 
 
+class _MirrorBlocked(Exception):
+    """Raised when a mirror gets stuck in an unresolvable redirect loop - the same
+    underlying cause as a 403 (an unsolved Cloudflare/DDoS-Guard challenge), just
+    surfaced differently. Handled identically to a 403 in the except block below."""
+
+
 def _try_rotation(original_url: str, current_url: str, selector: network.AAMirrorSelector) -> Optional[str]:
     """Try mirror/DNS rotation. Returns new URL or None."""
     if current_url.startswith(network.get_aa_base_url()):
@@ -297,27 +303,7 @@ def html_get_page(
                 if is_aa_url and response.is_redirect:
                     location = response.headers.get("Location", "")
                     if not location:
-                        logger.info(f"Redirect with no Location header (likely unsolved challenge): {current_url}")
-                        action, payload = _decide_on_block(
-                            current_url, cookies, use_bypasser_now, allow_bypasser_fallback, original_url, selector
-                        )
-                        if action == "rotate":
-                            current_url = payload
-                            headers = {"User-Agent": DOWNLOAD_HEADERS["User-Agent"]}
-                            is_aa_url = network.should_rotate_dns_for_url(current_url)
-                            allow_redirects = not is_aa_url
-                            redirects_followed = 0
-                            continue
-                        if action == "retry_cookies":
-                            continue
-                        if action == "bypasser":
-                            logger.info(f"Switching to bypasser: {current_url}")
-                            if status_callback:
-                                status_callback("resolving", "Bypassing protection...")
-                            use_bypasser_now = True
-                            continue
-                        logger.warning(f"Redirect loop, giving up: {current_url}")
-                        return _result("", current_url)
+                        raise _MirrorBlocked(f"Redirect with no Location header: {current_url}")
 
                     redirect_url = urljoin(current_url, location)
                     current_host = urlparse(current_url).hostname or ""
@@ -356,27 +342,7 @@ def html_get_page(
                     # Same-host redirect (relative or absolute) - follow manually.
                     redirects_followed += 1
                     if redirects_followed > 5:
-                        logger.info(f"Redirect loop (likely unsolved challenge): {current_url}")
-                        action, payload = _decide_on_block(
-                            current_url, cookies, use_bypasser_now, allow_bypasser_fallback, original_url, selector
-                        )
-                        if action == "rotate":
-                            current_url = payload
-                            headers = {"User-Agent": DOWNLOAD_HEADERS["User-Agent"]}
-                            is_aa_url = network.should_rotate_dns_for_url(current_url)
-                            allow_redirects = not is_aa_url
-                            redirects_followed = 0
-                            continue
-                        if action == "retry_cookies":
-                            continue
-                        if action == "bypasser":
-                            logger.info(f"Switching to bypasser: {current_url}")
-                            if status_callback:
-                                status_callback("resolving", "Bypassing protection...")
-                            use_bypasser_now = True
-                            continue
-                        logger.warning(f"Redirect loop, giving up: {current_url}")
-                        return _result("", current_url)
+                        raise _MirrorBlocked(f"Too many redirects for {current_url}")
                     current_url = redirect_url
                     continue
 
@@ -388,24 +354,29 @@ def html_get_page(
         except Exception as e:
             status = _get_status_code(e)
 
-            # 403 = Cloudflare/DDoS-Guard protection
-            if status == 403:
+            # 403 = Cloudflare/DDoS-Guard protection. A _MirrorBlocked redirect loop is
+            # the same underlying cause (unsolved challenge) surfaced differently.
+            if status == 403 or isinstance(e, _MirrorBlocked):
+                if isinstance(e, _MirrorBlocked):
+                    logger.info(f"{e}")
                 action, payload = _decide_on_block(
                     current_url, cookies, use_bypasser_now, allow_bypasser_fallback, original_url, selector
                 )
                 if action == "rotate":
+                    # headers/is_aa_url/allow_redirects/redirects_followed are rebuilt
+                    # from current_url at the top of the try block on the next attempt.
                     current_url = payload
                     continue
                 if action == "retry_cookies":
-                    logger.debug(f"403 but cookies now available - retrying with cookies: {current_url}")
+                    logger.debug(f"Blocked but cookies now available - retrying with cookies: {current_url}")
                     continue
                 if action == "bypasser":
-                    logger.info(f"403 detected; switching to bypasser: {current_url}")
+                    logger.info(f"Switching to bypasser: {current_url}")
                     if status_callback:
                         status_callback("resolving", "Bypassing protection...")
                     use_bypasser_now = True
                     continue
-                logger.warning(f"403 error, giving up: {current_url}")
+                logger.warning(f"Blocked, giving up: {current_url}")
                 return _result("", current_url)
 
             # 404 = Not found
