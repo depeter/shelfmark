@@ -213,7 +213,13 @@ async function fetchJSON<T>(
 // API functions
 export const searchBooks = async (query: string): Promise<Book[]> => {
   if (!query) return [];
-  const response = await fetchJSON<ReleasesResponse>(`${API_BASE}/releases?source=direct_download&${query}`);
+  // Let the backend control timeouts: a direct search can be slow when Anna's
+  // Archive is behind a challenge and every request has to go through the bypasser.
+  const response = await fetchJSON<ReleasesResponse>(
+    `${API_BASE}/releases?source=direct_download&${query}`,
+    {},
+    null,
+  );
   return response.releases.map(transformReleaseToDirectBook);
 };
 
